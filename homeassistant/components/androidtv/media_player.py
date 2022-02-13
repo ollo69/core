@@ -50,6 +50,7 @@ from .const import (
     CONF_APPS,
     CONF_EXCLUDE_UNNAMED_APPS,
     CONF_GET_SOURCES,
+    CONF_NETWORK_ADAPTER,
     CONF_SCREENCAP,
     CONF_TURN_OFF_COMMAND,
     CONF_TURN_ON_COMMAND,
@@ -104,6 +105,7 @@ async def async_setup_entry(
         entry.unique_id,
         entry.entry_id,
         hass.data[DOMAIN][entry.entry_id],
+        entry.data.get(CONF_NETWORK_ADAPTER),
     ]
 
     async_add_entities(
@@ -198,6 +200,7 @@ class ADBDevice(MediaPlayerEntity):
         unique_id,
         entry_id,
         entry_data,
+        net_adp=None,
     ):
         """Initialize the Android TV / Fire TV device."""
         self.aftv = aftv
@@ -217,7 +220,7 @@ class ADBDevice(MediaPlayerEntity):
             self._attr_device_info[ATTR_MANUFACTURER] = manufacturer
         if sw_version := info.get(ATTR_SW_VERSION):
             self._attr_device_info[ATTR_SW_VERSION] = sw_version
-        if mac := get_androidtv_mac(info):
+        if mac := get_androidtv_mac(info, net_adp):
             self._attr_device_info[ATTR_CONNECTIONS] = {(CONNECTION_NETWORK_MAC, mac)}
 
         self._app_id_to_name = {}
