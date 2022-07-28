@@ -20,6 +20,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import DOMAIN, MelCloudDevice
 from .const import ATTR_STATUS
@@ -39,7 +40,7 @@ async def async_setup_entry(
     )
 
 
-class AtwWaterHeater(WaterHeaterEntity):
+class AtwWaterHeater(CoordinatorEntity, WaterHeaterEntity):
     """Air-to-Water water heater."""
 
     _attr_supported_features = (
@@ -52,22 +53,19 @@ class AtwWaterHeater(WaterHeaterEntity):
 
     def __init__(self, api: MelCloudDevice, device: AtwDevice) -> None:
         """Initialize water heater device."""
+        super().__init__(api.coordinator)
         self._api = api
         self._device = device
         self._attr_unique_id = api.device.serial
         self._attr_device_info = api.device_info
 
-    async def async_update(self) -> None:
-        """Update state from MELCloud."""
-        await self._api.async_update()
-
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the entity on."""
-        await self._device.set({PROPERTY_POWER: True})
+        await self._api.async_set({PROPERTY_POWER: True})
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the entity off."""
-        await self._device.set({PROPERTY_POWER: False})
+        await self._api.async_set({PROPERTY_POWER: False})
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
@@ -102,7 +100,7 @@ class AtwWaterHeater(WaterHeaterEntity):
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set new target temperature."""
-        await self._device.set(
+        await self._api.async_set(
             {
                 PROPERTY_TARGET_TANK_TEMPERATURE: kwargs.get(
                     "temperature", self.target_temperature
@@ -112,7 +110,7 @@ class AtwWaterHeater(WaterHeaterEntity):
 
     async def async_set_operation_mode(self, operation_mode: str) -> None:
         """Set new target operation mode."""
-        await self._device.set({PROPERTY_OPERATION_MODE: operation_mode})
+        await self._api.async_set({PROPERTY_OPERATION_MODE: operation_mode})
 
     @property
     def min_temp(self) -> float:
