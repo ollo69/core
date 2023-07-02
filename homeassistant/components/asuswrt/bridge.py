@@ -7,6 +7,8 @@ import logging
 from typing import Any, cast
 
 from aioasuswrt.asuswrt import AsusWrt as AsusWrtLegacy
+from aiohttp import ClientSession
+from pyasuswrt import AsusWrtError, AsusWrtHttp
 
 from homeassistant.const import (
     CONF_HOST,
@@ -17,6 +19,7 @@ from homeassistant.const import (
     CONF_USERNAME,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
@@ -29,12 +32,16 @@ from .const import (
     DEFAULT_INTERFACE,
     KEY_METHOD,
     KEY_SENSORS,
+    PROTOCOL_HTTP,
+    PROTOCOL_HTTPS,
     PROTOCOL_TELNET,
     SENSORS_BYTES,
     SENSORS_LOAD_AVG,
     SENSORS_RATES,
     SENSORS_TEMPERATURES,
 )
+
+HTTP_PROTOCOLS = (PROTOCOL_HTTPS, PROTOCOL_HTTP)
 
 SENSORS_TYPE_BYTES = "sensors_bytes"
 SENSORS_TYPE_COUNT = "sensors_count"
@@ -45,6 +52,37 @@ SENSORS_TYPE_TEMPERATURES = "sensors_temperatures"
 WrtDevice = namedtuple("WrtDevice", ["ip", "name", "connected_to"])
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def migrate_legacy_protocols(
+    hass: HomeAssistant, conf: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Migrate router protocol from legacy to http."""
+    if conf.get(CONF_SSH_KEY):
+        # migration temptative is not possible with ssh key
+        return None
+
+    if conf[CONF_PROTOCOL] in HTTP_PROTOCOLS:
+        return {}
+
+    sec_conf = {
+        k: v for k, v in conf.items() if k in [CONF_HOST, CONF_USERNAME, CONF_PASSWORD]
+    }
+    for protocol in HTTP_PROTOCOLS:
+        new_conf = {**sec_conf, CONF_PROTOCOL: protocol}
+        bridge = AsusWrtBridge.get_bridge(hass, new_conf)
+        try:
+            await bridge.async_connect()
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.exception(
+                "Error migrating host %s to protocol %s", new_conf[CONF_HOST], protocol
+            )
+            continue
+
+        await bridge.async_disconnect()
+        return new_conf
+
+    return {}
 
 
 def _get_dict(keys: list, values: list) -> dict[str, Any]:
@@ -60,6 +98,9 @@ class AsusWrtBridge(ABC):
         hass: HomeAssistant, conf: dict[str, Any], options: dict[str, Any] | None = None
     ) -> AsusWrtBridge:
         """Get Bridge instance."""
+        if conf[CONF_PROTOCOL] in HTTP_PROTOCOLS:
+            session = async_get_clientsession(hass)
+            return AsusWrtHttpBridge(conf, session)
         return AsusWrtLegacyBridge(conf, options)
 
     def __init__(self, host: str) -> None:
@@ -268,6 +309,135 @@ class AsusWrtLegacyBridge(AsusWrtBridge):
         try:
             temperatures: dict[str, Any] = await self._api.async_get_temperature()
         except (OSError, ValueError) as exc:
+            raise UpdateFailed(exc) from exc
+
+        return temperatures
+
+
+class AsusWrtHttpBridge(AsusWrtBridge):
+    """The Bridge that use HTTP library."""
+
+    def __init__(self, conf: dict[str, Any], session: ClientSession) -> None:
+        """Initialize Bridge that use HTTP library."""
+        super().__init__(conf[CONF_HOST])
+        self._api: AsusWrtHttp = self._get_api(conf, session)
+
+    @staticmethod
+    def _get_api(conf: dict[str, Any], session: ClientSession) -> AsusWrtHttp:
+        """Get the AsusWrtHttp API."""
+        return AsusWrtHttp(
+            conf[CONF_HOST],
+            conf[CONF_USERNAME],
+            conf.get(CONF_PASSWORD, ""),
+            use_https=conf[CONF_PROTOCOL] == PROTOCOL_HTTPS,
+            port=conf.get(CONF_PORT),
+            session=session,
+        )
+
+    @property
+    def is_connected(self) -> bool:
+        """Get connected status."""
+        return cast(bool, self._api.is_connected)
+
+    async def async_connect(self) -> None:
+        """Connect to the device."""
+        await self._api.async_connect()
+
+        # get main router properties
+        if mac := self._api.mac:
+            self._label_mac = format_mac(mac)
+        self._firmware = self._api.firmware
+        self._model = self._api.model
+
+    async def async_disconnect(self) -> None:
+        """Disconnect to the device."""
+        await self._api.async_disconnect()
+
+    async def async_get_connected_devices(self) -> dict[str, WrtDevice]:
+        """Get list of connected devices."""
+        try:
+            api_devices = await self._api.async_get_connected_devices()
+        except AsusWrtError as exc:
+            raise UpdateFailed(exc) from exc
+        return {
+            format_mac(mac): WrtDevice(dev.ip, dev.name, dev.node)
+            for mac, dev in api_devices.items()
+        }
+
+    async def async_get_available_sensors(self) -> dict[str, dict[str, Any]]:
+        """Return a dictionary of available sensors for this bridge."""
+        sensors_temperatures = await self._get_available_temperature_sensors()
+        sensors_types = {
+            SENSORS_TYPE_BYTES: {
+                KEY_SENSORS: SENSORS_BYTES,
+                KEY_METHOD: self._get_bytes,
+            },
+            SENSORS_TYPE_LOAD_AVG: {
+                KEY_SENSORS: SENSORS_LOAD_AVG,
+                KEY_METHOD: self._get_load_avg,
+            },
+            SENSORS_TYPE_RATES: {
+                KEY_SENSORS: SENSORS_RATES,
+                KEY_METHOD: self._get_rates,
+            },
+            SENSORS_TYPE_TEMPERATURES: {
+                KEY_SENSORS: sensors_temperatures,
+                KEY_METHOD: self._get_temperatures,
+            },
+        }
+        return sensors_types
+
+    async def _get_available_temperature_sensors(self) -> list[str]:
+        """Check which temperature information is available on the router."""
+        try:
+            available_temps = await self._api.async_get_temperatures()
+            available_sensors = [
+                t for t in SENSORS_TEMPERATURES if t in available_temps
+            ]
+        except AsusWrtError as exc:
+            _LOGGER.warning(
+                (
+                    "Failed checking temperature sensor availability for ASUS router"
+                    " %s. Exception: %s"
+                ),
+                self.host,
+                exc,
+            )
+            return []
+        return available_sensors
+
+    async def _get_bytes(self) -> dict[str, Any]:
+        """Fetch byte information from the router."""
+        try:
+            datas = await self._api.async_get_traffic_bytes()
+        except AsusWrtError as exc:
+            raise UpdateFailed(exc) from exc
+
+        return _get_dict(SENSORS_BYTES, list(datas.values()))
+
+    async def _get_rates(self) -> dict[str, Any]:
+        """Fetch rates information from the router."""
+        try:
+            rates = await self._api.async_get_traffic_rates()
+        except AsusWrtError as exc:
+            raise UpdateFailed(exc) from exc
+
+        return _get_dict(SENSORS_RATES, list(rates.values()))
+
+    async def _get_load_avg(self) -> dict[str, Any]:
+        """Fetch cpu load avg information from the router."""
+        try:
+            load_avg = await self._api.async_get_loadavg()
+        except AsusWrtError as exc:
+            raise UpdateFailed(exc) from exc
+
+        return _get_dict(SENSORS_LOAD_AVG, list(load_avg.values()))
+
+    async def _get_temperatures(self) -> dict[str, Any]:
+        """Fetch temperatures information from the router."""
+        try:
+            temperatures: dict[str, Any] = await self._api.async_get_temperatures()
+        except AsusWrtError as exc:
             raise UpdateFailed(exc) from exc
 
         return temperatures

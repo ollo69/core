@@ -1,6 +1,8 @@
 """AsusWrt component constants."""
 DOMAIN = "asuswrt"
 
+FLOW_VERSION = 2
+
 CONF_DNSMASQ = "dnsmasq"
 CONF_INTERFACE = "interface"
 CONF_REQUIRE_IP = "require_ip"
@@ -20,6 +22,8 @@ KEY_SENSORS = "sensors"
 MODE_AP = "ap"
 MODE_ROUTER = "router"
 
+PROTOCOL_HTTP = "http"
+PROTOCOL_HTTPS = "https"
 PROTOCOL_SSH = "ssh"
 PROTOCOL_TELNET = "telnet"
 

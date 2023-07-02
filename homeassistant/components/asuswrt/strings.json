@@ -6,13 +6,25 @@
         "description": "Set required parameter to connect to your router",
         "data": {
           "host": "[%key:common::config_flow::data::host%]",
-          "name": "[%key:common::config_flow::data::name%]",
           "username": "[%key:common::config_flow::data::username%]",
           "password": "[%key:common::config_flow::data::password%]",
           "ssh_key": "Path to your SSH key file (instead of password)",
           "protocol": "Communication protocol to use",
-          "port": "Port (leave empty for protocol default)",
-          "mode": "[%key:common::config_flow::data::mode%]"
+          "port": "Port (leave empty for protocol default)"
+        }
+      },
+      "legacy": {
+        "title": "AsusWRT",
+        "description": "Set required parameters to connect to your router",
+        "data": {
+          "mode": "Router operating mode"
+        }
+      },
+      "reauth_confirm": {
+        "title": "[%key:common::config_flow::title::reauth%]",
+        "description": "AsusWRT integration needs to re-authenticate your account to use http prococol",
+        "data": {
+          "password": "[%key:common::config_flow::data::password%]"
         }
       }
     },
@@ -21,12 +33,15 @@
       "invalid_host": "[%key:common::config_flow::error::invalid_host%]",
       "pwd_and_ssh": "Only provide password or SSH key file",
       "pwd_or_ssh": "Please provide password or SSH key file",
+      "pwd_required": "Password is required for selected protocol",
       "ssh_not_file": "SSH key file not found",
       "unknown": "[%key:common::config_flow::error::unknown%]"
     },
     "abort": {
       "invalid_unique_id": "Impossible to determine a valid unique id for the device",
-      "no_unique_id": "A device without a valid unique id is already configured. Configuration of multiple instance is not possible"
+      "no_unique_id": "A device without a valid unique id is already configured. Configuration of multiple instance is not possible",
+      "reauth_fallback": "Reauth failed. Fallback to previous configuration",
+      "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]"
     }
   },
   "options": {
@@ -77,6 +92,16 @@
       },
       "cpu_temperature": {
         "name": "CPU Temperature"
+      }
+    }
+  },
+  "selector": {
+    "protocols": {
+      "options": {
+        "https": "HTTPS",
+        "http": "HTTP",
+        "ssh": "SSH",
+        "telnet": "Telnet"
       }
     }
   }
